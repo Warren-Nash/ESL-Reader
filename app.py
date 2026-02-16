@@ -71,4 +71,15 @@ if st.button("▶ Read Aloud", type="primary"):
                 mp3_bytes = asyncio.run(generate_audio(user_text, voice_code, rate_str))
                 
                 # Audio Player
-                st
+                st.audio(mp3_bytes, format="audio/mp3")
+                
+                # Download Button
+                st.download_button(
+                    label="⬇ Download MP3",
+                    data=mp3_bytes,
+                    file_name="esl_audio.mp3",
+                    mime="audio/mp3"
+                )
+                
+            except Exception as e:
+                st.error(f"Error: {e}")
