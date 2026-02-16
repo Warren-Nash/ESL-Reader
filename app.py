@@ -1,192 +1,76 @@
 import streamlit as st
-import streamlit.components.v1 as components
-import json
+import edge_tts
+import asyncio
+import nest_asyncio
 
-st.set_page_config(page_title="ESL Reader", page_icon="🗣️", layout="wide")
+# 1. Apply the fix for Streamlit's event loop
+nest_asyncio.apply()
 
-st.title("🗣️ ESL Universal Reader")
+# 2. Page Setup
+st.set_page_config(page_title="ESL Audio Reader", page_icon="🎧", layout="centered")
+st.title("🎧 ESL Audio Reader")
+st.markdown("Paste your text, choose a speed, and listen!")
 
-# --- Input Area ---
-default_text = "Hello class. This is a test. We are checking if the highlighting works on your device."
-text_input = st.text_area("Paste text here:", value=default_text, height=150)
+# --- Sidebar: Settings ---
+with st.sidebar:
+    st.header("Settings")
+    
+    # Voice Selection
+    voice_options = {
+        "🇺🇸 US Female (Aria)": "en-US-AriaNeural",
+        "🇺🇸 US Male (Guy)": "en-US-GuyNeural",
+        "🇬🇧 UK Female (Sonia)": "en-GB-SoniaNeural",
+        "🇬🇧 UK Male (Ryan)": "en-GB-RyanNeural"
+    }
+    selected_voice = st.selectbox("Choose Voice:", list(voice_options.keys()))
+    voice_code = voice_options[selected_voice]
 
-# --- Python Text Cleaning ---
-# We clean the text here to prevent JavaScript errors
-clean_text = text_input.replace("\n", " ").strip()
-# We use json.dumps to make sure quotes/apostrophes don't break the code
-json_text = json.dumps(clean_text)
+    # Speed Control
+    # 1.0 is normal. 0.5 is half speed.
+    speed = st.slider("Reading Speed:", min_value=0.5, max_value=1.5, value=1.0, step=0.1)
+    
+    # Convert speed to edge-tts format (e.g., "+50%" or "-20%")
+    percentage = int((speed - 1.0) * 100)
+    if percentage >= 0:
+        rate_str = f"+{percentage}%"
+    else:
+        rate_str = f"{percentage}%"
 
-# --- The Reader Component ---
-html_code = f"""
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <style>
-        body {{ font-family: sans-serif; padding: 20px; background: #fff; }}
-        
-        /* Controls */
-        .controls {{ 
-            margin-bottom: 20px; 
-            padding: 15px; 
-            background: #f0f2f6; 
-            border-radius: 8px; 
-            display: flex; 
-            gap: 10px; 
-            flex-wrap: wrap; 
-        }}
-        button {{ 
-            padding: 10px 20px; 
-            cursor: pointer; 
-            background: #ff4b4b; 
-            color: white; 
-            border: none; 
-            border-radius: 4px; 
-            font-size: 16px;
-        }}
-        button:hover {{ background: #ff3333; }}
-        select {{ padding: 10px; border-radius: 4px; border: 1px solid #ccc; }}
+# --- Main Input ---
+user_text = st.text_area("Paste English text here:", height=200, placeholder="Type something here...")
 
-        /* Text Display */
-        #display {{ 
-            font-size: 22px; 
-            line-height: 1.8; 
-            color: #333; 
-        }}
-        
-        /* The Highlight */
-        .word {{ 
-            padding: 2px 2px; 
-            border-radius: 3px; 
-            margin-right: 4px; 
-            display: inline-block;
-            transition: 0.1s;
-        }}
-        .active {{ 
-            background-color: #ffd700; /* Yellow */
-            color: black; 
-            font-weight: bold; 
-            box-shadow: 0 0 5px rgba(255, 215, 0, 0.5);
-        }}
-        
-        /* Debug Status */
-        #status {{ margin-top: 20px; color: #888; font-size: 12px; font-family: monospace; }}
-    </style>
-</head>
-<body>
-
-    <div class="controls">
-        <button onclick="speak()">▶ Read Aloud</button>
-        <button onclick="stop()" style="background:#555;">⏹ Stop</button>
-        <select id="voices"></select>
-    </div>
-
-    <div id="display"></div>
-    <div id="status">Status: Ready</div>
-
-    <script>
-        const text = {json_text};
-        const display = document.getElementById('display');
-        const voiceSelect = document.getElementById('voices');
-        const status = document.getElementById('status');
-        let synth = window.speechSynthesis;
-        let wordSpans = [];
-
-        // 1. Initialize
-        function init() {{
-            display.innerHTML = '';
-            wordSpans = [];
-            // Split by space to create spans
-            const words = text.split(' ');
+# --- Audio Logic ---
+async def generate_audio(text, voice, rate):
+    communicate = edge_tts.Communicate(text, voice, rate=rate)
+    audio_data = b""
+    
+    # Simple stream - we only care about the audio, not the timing
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            audio_data += chunk["data"]
             
-            words.forEach((w, i) => {{
-                let s = document.createElement('span');
-                s.innerText = w;
-                s.className = 'word';
-                // Store the start index of this word in the text
-                // This helps us match the 'charIndex' event later
-                s.dataset.index = i; 
-                display.appendChild(s);
-                wordSpans.push(s);
-            }});
+    return audio_data
 
-            loadVoices();
-            if (speechSynthesis.onvoiceschanged !== undefined) {{
-                speechSynthesis.onvoiceschanged = loadVoices;
-            }}
-        }}
-
-        function loadVoices() {{
-            const voices = synth.getVoices();
-            voiceSelect.innerHTML = '';
-            // Filter for English
-            const enVoices = voices.filter(v => v.lang.includes('en'));
-            
-            enVoices.forEach(v => {{
-                const opt = document.createElement('option');
-                opt.textContent = v.name + ' (' + v.lang + ')';
-                opt.value = v.name;
-                voiceSelect.appendChild(opt);
-            }});
-        }}
-
-        // 2. The Speaking Logic
-        function speak() {{
-            stop();
-            const utter = new SpeechSynthesisUtterance(text);
-            
-            // Set Voice
-            const voices = synth.getVoices();
-            const selected = voiceSelect.value;
-            utter.voice = voices.find(v => v.name === selected);
-            
-            status.innerText = "Status: Speaking using " + selected;
-
-            // 3. The Highlight Event (The Crucial Part)
-            utter.onboundary = function(event) {{
-                if (event.name === 'word') {{
-                    // Remove old highlights
-                    wordSpans.forEach(s => s.classList.remove('active'));
-                    
-                    // Find the word based on character index
-                    const charIndex = event.charIndex;
-                    
-                    // Simple logic: We calculate which word corresponds to this character
-                    let currentCount = 0;
-                    for (let i = 0; i < wordSpans.length; i++) {{
-                        // Add word length + 1 for the space
-                        let wLen = wordSpans[i].innerText.length + 1; 
-                        
-                        if (charIndex >= currentCount && charIndex < (currentCount + wLen)) {{
-                            wordSpans[i].classList.add('active');
-                            break;
-                        }}
-                        currentCount += wLen;
-                    }}
-                }}
-            }};
-
-            utter.onend = () => {{ 
-                wordSpans.forEach(s => s.classList.remove('active')); 
-                status.innerText = "Status: Finished";
-            }};
-            
-            utter.onerror = (e) => {{
-                status.innerText = "Status: Error (" + e.error + ")";
-            }};
-
-            synth.speak(utter);
-        }}
-
-        function stop() {{
-            synth.cancel();
-            wordSpans.forEach(s => s.classList.remove('active'));
-            status.innerText = "Status: Stopped";
-        }}
-
-        init();
-    </script>
-</body>
-</html>
-"""
-
-components.html(html_code, height=600, scrolling=True)
+# --- Play Button ---
+if st.button("▶ Read Aloud", type="primary"):
+    if not user_text.strip():
+        st.warning("Please enter some text first.")
+    else:
+        with st.spinner("Generating audio..."):
+            try:
+                # Generate the audio file
+                mp3_bytes = asyncio.run(generate_audio(user_text, voice_code, rate_str))
+                
+                # Display the Audio Player
+                st.audio(mp3_bytes, format="audio/mp3")
+                
+                # Bonus: Add a Download Button
+                st.download_button(
+                    label="⬇ Download MP3",
+                    data=mp3_bytes,
+                    file_name="esl_audio.mp3",
+                    mime="audio/mp3"
+                )
+                
+            except Exception as e:
+                st.error(f"Error: {e}")
