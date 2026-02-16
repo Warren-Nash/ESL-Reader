@@ -7,26 +7,8 @@ import nest_asyncio
 nest_asyncio.apply()
 
 # 2. Page Setup
-st.set_page_config(page_title="ESL Audio Reader", page_icon="🎧", layout="centered")
-st.title("🎧 ESL Audio Reader")
-
-# --- CUSTOM CSS FOR BIGGER TEXT ---
-# This block forces the text area to use a larger font
-st.markdown("""
-<style>
-    /* Target the text area */
-    .stTextArea textarea {
-        font-size: 22px !important;    /* Bigger font */
-        line-height: 1.6 !important;   /* More space between lines */
-        font-family: sans-serif;
-    }
-    /* Target the label above the text area */
-    .stTextArea label {
-        font-size: 18px !important;
-        font-weight: bold;
-    }
-</style>
-""", unsafe_allow_html=True)
+st.set_page_config(page_title="ESL Audio Reader", page_icon="🗣️", layout="centered")
+st.title("🗣️ ESL Audio Reader")
 
 # --- Sidebar: Settings ---
 with st.sidebar:
@@ -45,12 +27,28 @@ with st.sidebar:
     # Speed Control
     speed = st.slider("Reading Speed:", 0.5, 1.5, 1.0, 0.1)
     
+    # Text Size Control (New!)
+    # Range: 14px (Small) to 40px (Huge). Default: 22px.
+    text_size = st.slider("Text Size:", 14, 50, 22)
+    
     # Convert speed to edge-tts format
     percentage = int((speed - 1.0) * 100)
     rate_str = f"+{percentage}%" if percentage >= 0 else f"{percentage}%"
 
+# --- DYNAMIC CSS ---
+# We use the 'text_size' variable from the slider to set the CSS
+st.markdown(f"""
+<style>
+    /* Target the text area inside Streamlit */
+    .stTextArea textarea {{
+        font-size: {text_size}px !important;
+        line-height: 1.5 !important;
+        font-family: sans-serif;
+    }}
+</style>
+""", unsafe_allow_html=True)
+
 # --- Main Input ---
-# The text here will now be BIG thanks to the CSS above
 user_text = st.text_area("Paste English text here:", height=300, placeholder="Paste text here...")
 
 # --- Audio Logic ---
@@ -73,15 +71,4 @@ if st.button("▶ Read Aloud", type="primary"):
                 mp3_bytes = asyncio.run(generate_audio(user_text, voice_code, rate_str))
                 
                 # Audio Player
-                st.audio(mp3_bytes, format="audio/mp3")
-                
-                # Download Button
-                st.download_button(
-                    label="⬇ Download MP3",
-                    data=mp3_bytes,
-                    file_name="esl_audio.mp3",
-                    mime="audio/mp3"
-                )
-                
-            except Exception as e:
-                st.error(f"Error: {e}")
+                st
