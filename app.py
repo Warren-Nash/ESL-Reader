@@ -60,3 +60,32 @@ user_text = st.text_area("Вставьте английский текст сю�
 # --- Логика создания аудио ---
 async def generate_audio(text, voice, rate):
     communicate = edge_tts.Communicate(text, voice, rate=rate)
+    audio_data = b""
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            audio_data += chunk["data"]
+    return audio_data
+
+# --- Кнопка запуска ---
+if st.button("▶ Читать вслух", type="primary"):
+    if not user_text.strip():
+        st.warning("Пожалуйста, сначала введите текст.")
+    else:
+        with st.spinner("Создаю аудио..."):
+            try:
+                # Запуск асинхронной функции
+                mp3_bytes = asyncio.run(generate_audio(user_text, voice_code, rate_str))
+                
+                # Аудиоплеер
+                st.audio(mp3_bytes, format="audio/mp3")
+                
+                # Кнопка скачивания
+                st.download_button(
+                    label="⬇ Скачать MP3",
+                    data=mp3_bytes,
+                    file_name="audio_lesson.mp3",
+                    mime="audio/mp3"
+                )
+                
+            except Exception as e:
+                st.error(f"Ошибка: {e}")
