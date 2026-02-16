@@ -9,7 +9,24 @@ nest_asyncio.apply()
 # 2. Page Setup
 st.set_page_config(page_title="ESL Audio Reader", page_icon="🎧", layout="centered")
 st.title("🎧 ESL Audio Reader")
-st.markdown("Paste your text, choose a speed, and listen!")
+
+# --- CUSTOM CSS FOR BIGGER TEXT ---
+# This block forces the text area to use a larger font
+st.markdown("""
+<style>
+    /* Target the text area */
+    .stTextArea textarea {
+        font-size: 22px !important;    /* Bigger font */
+        line-height: 1.6 !important;   /* More space between lines */
+        font-family: sans-serif;
+    }
+    /* Target the label above the text area */
+    .stTextArea label {
+        font-size: 18px !important;
+        font-weight: bold;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # --- Sidebar: Settings ---
 with st.sidebar:
@@ -22,33 +39,27 @@ with st.sidebar:
         "🇬🇧 UK Female (Sonia)": "en-GB-SoniaNeural",
         "🇬🇧 UK Male (Ryan)": "en-GB-RyanNeural"
     }
-    selected_voice = st.selectbox("Choose Voice:", list(voice_options.keys()))
-    voice_code = voice_options[selected_voice]
+    selected_voice_name = st.selectbox("Choose Voice:", list(voice_options.keys()))
+    voice_code = voice_options[selected_voice_name]
 
     # Speed Control
-    # 1.0 is normal. 0.5 is half speed.
-    speed = st.slider("Reading Speed:", min_value=0.5, max_value=1.5, value=1.0, step=0.1)
+    speed = st.slider("Reading Speed:", 0.5, 1.5, 1.0, 0.1)
     
-    # Convert speed to edge-tts format (e.g., "+50%" or "-20%")
+    # Convert speed to edge-tts format
     percentage = int((speed - 1.0) * 100)
-    if percentage >= 0:
-        rate_str = f"+{percentage}%"
-    else:
-        rate_str = f"{percentage}%"
+    rate_str = f"+{percentage}%" if percentage >= 0 else f"{percentage}%"
 
 # --- Main Input ---
-user_text = st.text_area("Paste English text here:", height=200, placeholder="Type something here...")
+# The text here will now be BIG thanks to the CSS above
+user_text = st.text_area("Paste English text here:", height=300, placeholder="Paste text here...")
 
 # --- Audio Logic ---
 async def generate_audio(text, voice, rate):
     communicate = edge_tts.Communicate(text, voice, rate=rate)
     audio_data = b""
-    
-    # Simple stream - we only care about the audio, not the timing
     async for chunk in communicate.stream():
         if chunk["type"] == "audio":
             audio_data += chunk["data"]
-            
     return audio_data
 
 # --- Play Button ---
@@ -58,13 +69,13 @@ if st.button("▶ Read Aloud", type="primary"):
     else:
         with st.spinner("Generating audio..."):
             try:
-                # Generate the audio file
+                # Run the async function
                 mp3_bytes = asyncio.run(generate_audio(user_text, voice_code, rate_str))
                 
-                # Display the Audio Player
+                # Audio Player
                 st.audio(mp3_bytes, format="audio/mp3")
                 
-                # Bonus: Add a Download Button
+                # Download Button
                 st.download_button(
                     label="⬇ Download MP3",
                     data=mp3_bytes,
