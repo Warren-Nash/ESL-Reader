@@ -1,123 +1,218 @@
 import streamlit as st
-import edge_tts
-import asyncio
-import base64
-import json
-import nest_asyncio
+import streamlit.components.v1 as components
 
-# 1. Apply Async Fix
-nest_asyncio.apply()
+st.set_page_config(page_title="ESL Reader", page_icon="🗣️", layout="wide")
 
-st.set_page_config(page_title="ESL Reader", page_icon="🏫")
-st.title("🏫 ESL Reader (Stable)")
+st.title("🗣️ ESL Reader (Browser Native)")
+st.markdown("""
+This version uses your **device's built-in voices**. 
+It guarantees that **highlighting always works** because it runs directly in your browser.
+""")
 
-# --- Settings ---
-with st.sidebar:
-    st.header("Settings")
-    st.info("Note: Speed control is disabled in this version to ensure highlighting works.")
-    
-    # We only use Aria and Guy (US) as they are the most reliable for timestamps
-    voice_options = {
-        "US Female (Aria)": "en-US-AriaNeural",
-        "US Male (Guy)": "en-US-GuyNeural",
-        "UK Female (Sonia)": "en-GB-SoniaNeural",
-        "UK Male (Ryan)": "en-GB-RyanNeural"
-    }
-    selected_voice = st.selectbox("Choose Voice:", list(voice_options.keys()))
-    voice_code = voice_options[selected_voice]
+# --- Input Area ---
+default_text = "Hello! This app uses your browser's built-in text-to-speech engine. It highlights every word perfectly as it is spoken. You can change the speed and the voice below."
+text_input = st.text_area("Paste your text here:", value=default_text, height=150)
 
-user_text = st.text_area("Paste Text:", height=150, value="Hello class. This is a test of the highlighting system.")
+# --- The Magic Component (HTML/JS) ---
+# We inject a full HTML5 application that handles the reading locally.
+html_code = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {{
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f8f9fa;
+            padding: 20px;
+        }}
+        .controls {{
+            background: white;
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }}
+        button {{
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background 0.2s;
+        }}
+        button:hover {{ background-color: #0056b3; }}
+        button.stop {{ background-color: #dc3545; }}
+        button.stop:hover {{ background-color: #a71d2a; }}
+        
+        select, input {{
+            padding: 8px;
+            border-radius: 5px;
+            border: 1px solid #ddd;
+        }}
 
-# --- Logic ---
-async def get_data(text, voice):
-    # REMOVED: rate=rate_str (This is often the culprit)
-    communicate = edge_tts.Communicate(text, voice)
-    
-    audio_data = b""
-    word_timings = []
-    
-    # Debug counters
-    audio_chunks = 0
-    timing_chunks = 0
-    
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            audio_data += chunk["data"]
-            audio_chunks += 1
-        elif chunk["type"] == "WordBoundary":
-            timing_chunks += 1
-            start = chunk["offset"] / 10_000_000
-            duration = chunk["duration"] / 10_000_000
-            word_timings.append({
-                "word": chunk["text"],
-                "start": start,
-                "end": start + duration
-            })
+        #text-display {{
+            font-size: 20px;
+            line-height: 1.8;
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            border: 1px solid #e9ecef;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            min-height: 200px;
+        }}
+        
+        /* The Highlight Style */
+        .word {{
+            padding: 2px 2px;
+            border-radius: 3px;
+            margin: 0 1px;
+            transition: background-color 0.1s;
+        }}
+        .active {{
+            background-color: #ffeb3b; /* Yellow */
+            color: black;
+            font-weight: bold;
+            box-shadow: 0 0 3px rgba(0,0,0,0.2);
+        }}
+    </style>
+</head>
+<body>
+
+    <div class="controls">
+        <button onclick="startReading()">▶ Play</button>
+        <button onclick="stopReading()" class="stop">⏹ Stop</button>
+        
+        <div>
+            <label>Speed:</label>
+            <input type="range" id="rate" min="0.5" max="2" value="1" step="0.1" oninput="updateSpeedLabel()">
+            <span id="speed-label">1.0x</span>
+        </div>
+
+        <div>
+            <label>Voice:</label>
+            <select id="voice-select"></select>
+        </div>
+    </div>
+
+    <div id="text-display"></div>
+
+    <script>
+        // 1. Setup Variables
+        const text = `{text_input.replace(chr(10), " ").replace("`", "'")}`; 
+        const display = document.getElementById('text-display');
+        const voiceSelect = document.getElementById('voice-select');
+        const rateInput = document.getElementById('rate');
+        let synth = window.speechSynthesis;
+        let utterance = null;
+        let wordSpans = [];
+
+        // 2. Initialize Text & Voices
+        function init() {{
+            // Build word spans
+            display.innerHTML = '';
+            wordSpans = [];
+            const words = text.split(/\\s+/); // Split by spaces
             
-    return audio_data, word_timings, audio_chunks, timing_chunks
+            words.forEach((word, index) => {{
+                let span = document.createElement('span');
+                span.innerText = word + " ";
+                span.className = 'word';
+                // Store the index to match with speech events later
+                span.dataset.index = index; 
+                display.appendChild(span);
+                wordSpans.push(span);
+            }});
 
-# --- Button ---
-if st.button("Read Aloud"):
-    if not user_text.strip():
-        st.warning("Enter text first.")
-    else:
-        with st.spinner("Connecting to Microsoft Edge servers..."):
-            try:
-                # Run Async
-                mp3_bytes, timings, a_count, t_count = asyncio.run(get_data(user_text, voice_code))
-                
-                # --- DIAGNOSTIC INFO (This will tell us the problem) ---
-                if not timings:
-                    st.error(f"Failed. Received {a_count} audio chunks but {t_count} timing chunks.")
-                    st.write("Troubleshooting: Try a longer sentence. Try 'US Female (Aria)'.")
-                else:
-                    # Success! Render the player.
-                    st.success(f"Success! Generated {len(timings)} words.")
+            // Load Voices (Browsers load these asynchronously)
+            populateVoices();
+            if (speechSynthesis.onvoiceschanged !== undefined) {{
+                speechSynthesis.onvoiceschanged = populateVoices;
+            }}
+        }}
+
+        function populateVoices() {{
+            const voices = synth.getVoices();
+            voiceSelect.innerHTML = '';
+            
+            // Filter for English voices only
+            const englishVoices = voices.filter(v => v.lang.includes('en'));
+            
+            englishVoices.forEach(voice => {{
+                const option = document.createElement('option');
+                option.textContent = voice.name + ' (' + voice.lang + ')';
+                option.value = voice.name;
+                voiceSelect.appendChild(option);
+            }});
+        }}
+
+        function updateSpeedLabel() {{
+            document.getElementById('speed-label').innerText = rateInput.value + 'x';
+        }}
+
+        // 3. Reading Logic
+        function startReading() {{
+            // Cancel any current speech
+            stopReading();
+
+            utterance = new SpeechSynthesisUtterance(text);
+            
+            // Apply Settings
+            const selectedVoiceName = voiceSelect.value;
+            const voices = synth.getVoices();
+            utterance.voice = voices.find(v => v.name === selectedVoiceName);
+            utterance.rate = parseFloat(rateInput.value);
+
+            // HIGHLIGHTING EVENT (The Boundary)
+            let charIndex = 0;
+            
+            utterance.onboundary = function(event) {{
+                if (event.name === 'word') {{
+                    // Remove highlight from all
+                    wordSpans.forEach(s => s.classList.remove('active'));
                     
-                    audio_b64 = base64.b64encode(mp3_bytes).decode()
-                    timings_json = json.dumps(timings)
-                    
-                    html_code = f"""
-                    <!DOCTYPE html>
-                    <html>
-                    <style>
-                        .box {{ padding: 20px; border: 1px solid #ddd; border-radius: 8px; background: #fff; line-height: 1.8; font-family: sans-serif; font-size: 18px; }}
-                        .word {{ padding: 2px; border-radius: 3px; transition: 0.1s; margin-right: 4px; display: inline-block; }}
-                        .active {{ background: #ffd700; color: black; font-weight: bold; }}
-                    </style>
-                    <div class="box">
-                        <audio id="player" controls autoplay style="width:100%; margin-bottom:15px;">
-                            <source src="data:audio/mp3;base64,{audio_base64}" type="audio/mp3">
-                        </audio>
-                        <div id="text"></div>
-                    </div>
-                    <script>
-                        const data = {timings_json};
-                        const div = document.getElementById('text');
-                        const player = document.getElementById('player');
-                        const spans = [];
+                    // We need to find which word corresponds to this character index
+                    // This is a simple estimation based on char count
+                    let currentLength = 0;
+                    for (let i = 0; i < wordSpans.length; i++) {{
+                        // +1 for the space
+                        currentLength += wordSpans[i].innerText.length; 
+                        if (currentLength > event.charIndex) {{
+                            wordSpans[i].classList.add('active');
+                            // Auto-scroll to the word
+                            wordSpans[i].scrollIntoView({{behavior: "smooth", block: "center"}});
+                            break;
+                        }}
+                    }}
+                }}
+            }};
 
-                        // Build text
-                        data.forEach((item, i) => {{
-                            let s = document.createElement('span');
-                            s.innerText = item.word;
-                            s.className = 'word';
-                            div.appendChild(s);
-                            spans.push(s);
-                        }});
+            utterance.onend = function() {{
+                wordSpans.forEach(s => s.classList.remove('active'));
+            }};
 
-                        // Highlight loop
-                        player.ontimeupdate = () => {{
-                            let t = player.currentTime;
-                            for(let i=0; i<data.length; i++) {{
-                                if (t >= data[i].start && t < data[i].end) spans[i].classList.add('active');
-                                else spans[i].classList.remove('active');
-                            }}
-                        }};
-                    </script>
-                    </html>
-                    """
-                    st.components.v1.html(html_code, height=500, scrolling=True)
+            synth.speak(utterance);
+        }}
 
-            except Exception as e:
-                st.error(f"System Error: {e}")
+        function stopReading() {{
+            synth.cancel();
+            wordSpans.forEach(s => s.classList.remove('active'));
+        }}
+
+        // Run Init
+        init();
+
+    </script>
+</body>
+</html>
+"""
+
+# Render the HTML component with a fixed height
+components.html(html_code, height=600, scrolling=True)
